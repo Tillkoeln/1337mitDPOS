@@ -17,6 +17,8 @@
 #include <boost/filesystem/fstream.hpp>
 
 
+#include <stdio.h>
+
 using namespace std;
 using namespace boost;
 
@@ -36,16 +38,20 @@ map<uint256, CBlockIndex*> mapBlockIndex;
 set<pair<COutPoint, unsigned int> > setStakeSeen;
 libzerocoin::Params* ZCParams;
 
-CBigNum bnProofOfWorkLimit(~uint256(0) >> 20); // target limit for proof of work, results with 0,000244140625 proof-of-work difficulty
+CBigNum bnProofOfWorkLimit(~uint256(0) >> 20); 
 CBigNum bnProofOfStakeLimit(~uint256(0) >> 20);
 CBigNum bnProofOfWorkLimitTestNet(~uint256(0) >> 16);
 
-unsigned int nTargetSpacing = 60; // 1 minutes per block
-unsigned int nStakeMinAge = 1 * 60 * 60; // 1 hours
-unsigned int nStakeMaxAge = -1; // unlimited
-unsigned int nModifierInterval = 10 * 60; // time to elapse before new modifier is computed
+static const int64_t nTargetTimespan = 25 * 60;  // 25m
+unsigned int nTargetSpacing = 5 * 60; // 5 minute blocks
+static const int64_t nInterval = nTargetTimespan / nTargetSpacing;
+static const int64_t nDiffChangeTarget = 1;
 
-int nCoinbaseMaturity = 5;
+unsigned int nStakeMinAge = 60 * 60 * 24 * 1; // 24 hours
+unsigned int nStakeMaxAge = 60 * 60 * 24 * 180;  // 180 days
+unsigned int nModifierInterval = 10 * 60; // Time to elapse before new modifier is computed
+
+int nCoinbaseMaturity = 3;
 CBlockIndex* pindexGenesisBlock = NULL;
 int nBestHeight = -1;
 
@@ -68,7 +74,7 @@ map<uint256, set<uint256> > mapOrphanTransactionsByPrev;
 // Constant stuff for coinbase transactions we create:
 CScript COINBASE_FLAGS;
 
-const string strMessageMagic = "1337 Signed Message:\n";
+const string strMessageMagic = "Steps Signed Message:\n";
 
 // Settings
 int64_t nTransactionFee = MIN_TX_FEE;
@@ -309,15 +315,26 @@ bool CTransaction::IsStandard() const
             return false;
         }
     }
+
+    unsigned int nDataOut = 0;
+    txnouttype whichType;
     BOOST_FOREACH(const CTxOut& txout, vout) {
-        if (!::IsStandard(txout.scriptPubKey))
+        if (!::IsStandard(txout.scriptPubKey, whichType))
             return false;
+        if (whichType == TX_NULL_DATA)
+            nDataOut++;
         if (txout.nValue == 0)
             return false;
         if (fEnforceCanonical && !txout.scriptPubKey.HasCanonicalPushes()) {
             return false;
         }
     }
+
+    // only one OP_RETURN txout is permitted
+    if (nDataOut > 1) {
+        return false;
+    }
+
     return true;
 }
 
@@ -808,7 +825,7 @@ int CMerkleTx::GetBlocksToMaturity() const
 {
     if (!(IsCoinBase() || IsCoinStake()))
         return 0;
-    return max(0, (nCoinbaseMaturity+10) - GetDepthInMainChain());
+    return max(0, (nCoinbaseMaturity+3) - GetDepthInMainChain());
 }
 
 
@@ -966,132 +983,188 @@ uint256 WantedByOrphan(const CBlock* pblockOrphan)
 // miner's coin base reward
 int64_t GetProofOfWorkReward(int64_t nFees)
 {
-
     int64_t nSubsidy = 0 * COIN;
-       
-   if (pindexBest->nHeight <= 1)
-      {
-        int64_t nSubsidy = 1176557.608 * COIN;
-        return nSubsidy + nFees;
-      }
-      
-    else if (pindexBest->nHeight <= 1440)
-      {
-        int64_t nSubsidy = 0 * COIN;
-        return nSubsidy + nFees;
-      }
-
-	else if (pindexBest->nHeight <= 2880)
-      {
-        int64_t nSubsidy = 0.1337 * COIN;
-        return nSubsidy + nFees;
-      }
-
-	else if (pindexBest->nHeight <= 4320)
-      {
-        int64_t nSubsidy = 1.337 * COIN;
-        return nSubsidy + nFees;
-      }
-
-	else if (pindexBest->nHeight <= 5760)
-      {
-        int64_t nSubsidy = 13.37 * COIN;
-        return nSubsidy + nFees;
-      }  
-
-	else if (pindexBest->nHeight <= 7200)
-      {
-        int64_t nSubsidy = 133.7 * COIN;
-        return nSubsidy + nFees;
-      }      
-
-	else if (pindexBest->nHeight <= 8640)
-      {
-        int64_t nSubsidy = 1337 * COIN;
-        return nSubsidy + nFees;
-      }      
-
-	else if (pindexBest->nHeight <= 10080)
-      {
-        int64_t nSubsidy = 13370 * COIN;
-        return nSubsidy + nFees;
-      }
-
-	else if (pindexBest->nHeight <= 11520)
-      {
-        int64_t nSubsidy = 1337 * COIN;
-        return nSubsidy + nFees;
-      }
-
-	else if (pindexBest->nHeight <= 12960)
-      {
-        int64_t nSubsidy = 133.7 * COIN;
-        return nSubsidy + nFees;
-      }     
-
-	else if (pindexBest->nHeight <= 14400)
-      {
-        int64_t nSubsidy = 13.37 * COIN;
-        return nSubsidy + nFees;
-      }	  
-
-	else if (pindexBest->nHeight <= 15840)
-      {
-        int64_t nSubsidy = 1.337 * COIN;
-        return nSubsidy + nFees;
-      }	  
-
-	else if (pindexBest->nHeight <= 17280)
-      {
-        int64_t nSubsidy = 0.1337 * COIN;
-        return nSubsidy + nFees;
-      }	      
-      
-      
-      
+ 
+    if(pindexBest->nHeight < 1)
+    {
+        nSubsidy = 15000000 * COIN; //ICO
+    }
+        else if(pindexBest->nHeight < 1001)
+    {
+        nSubsidy = 0 * COIN;
+    }
     if (fDebug && GetBoolArg("-printcreation"))
-    printf("GetProofOfWorkReward() : create=%s nSubsidy=%"PRId64"\n", FormatMoney(nSubsidy).c_str(), nSubsidy);
+        printf("GetProofOfWorkReward() : create=%s nSubsidy=%"PRId64"\n", FormatMoney(nSubsidy).c_str(), nSubsidy);
+
+    return nSubsidy + nFees;
+}
+
+// miner's coin stake reward based on coin age spent (coin-days)
+int64_t GetProofOfStakeReward(int64_t nCoinAge, int64_t nFees)
+{
     
-    return nSubsidy + nFees;
+    int64_t nSubsidy = nCoinAge * COIN_YEAR_REWARD * 33 / (365 * 33 + 8);  //default 1% yr
 
-}
+    if(pindexBest->nHeight < 2101)
+    {
+        nSubsidy = 10 * COIN; //~20000
+    }
 
+    else if(pindexBest->nHeight < 4101)
+    {
+        nSubsidy = 20 * COIN; //~40000
+    }
 
+    else if(pindexBest->nHeight < 6101)
+    {
+        nSubsidy = 30 * COIN; //~60000
+    }
 
-// miner's coin stake reward based on coin age spent (coin-days)
-int64_t GetProofOfStakeRewardV1(int64_t nCoinAge, int64_t nFees)
-{
-    int64_t nSubsidy = nCoinAge * COIN_YEAR_REWARD * 33 / (365 * 33 + 8);
+    else if(pindexBest->nHeight < 8101)
+    {
+        nSubsidy = 40 * COIN; //~80000
+    }
+
+    else if(pindexBest->nHeight < 10101)
+    {
+        nSubsidy = 50 * COIN; //~100000
+    }
+
+    else if(pindexBest->nHeight < 12101)
+    {
+        nSubsidy = 60 * COIN; //~120000
+    }
+
+    else if(pindexBest->nHeight < 14101)
+    {
+        nSubsidy = 70 * COIN; //~140000
+    }
+
+    else if(pindexBest->nHeight < 16101)
+    {
+        nSubsidy = 80 * COIN; //~160000
+    }
+
+    else if(pindexBest->nHeight < 18101)
+    {
+        nSubsidy = 90 * COIN; //~180000
+    }
+
+    else if(pindexBest->nHeight < 20101)
+    {
+        nSubsidy = 100 * COIN; //~200000
+    }
+
+    else if(pindexBest->nHeight < 22101)
+    {
+        nSubsidy = 110 * COIN; //~220000
+    }
+
+    else if(pindexBest->nHeight < 24101)
+    {
+        nSubsidy = 120 * COIN; //~240000
+    }
+
+    else if(pindexBest->nHeight < 26101)
+    {
+        nSubsidy = 130 * COIN; //~260000
+    }
+
+    else if(pindexBest->nHeight < 28101)
+    {
+        nSubsidy = 140 * COIN; //~280000
+    }
+
+    else if(pindexBest->nHeight < 30101)
+    {
+        nSubsidy = 150 * COIN; //~300000
+    }
+
+    else if(pindexBest->nHeight < 32101)
+    {
+        nSubsidy = 160 * COIN; //~320000
+    }
+
+    else if(pindexBest->nHeight < 34101)
+    {
+        nSubsidy = 170 * COIN; //~340000
+    }
+
+    else if(pindexBest->nHeight < 36101)
+    {
+        nSubsidy = 180 * COIN; //~360000
+    }
+
+    else if(pindexBest->nHeight < 38101)
+    {
+        nSubsidy = 190 * COIN; //~380000
+    }
+
+    else if(pindexBest->nHeight < 40101)
+    {
+        nSubsidy = 200 * COIN; //~400000
+    }
+
+    else if(pindexBest->nHeight < 42101)
+    {
+        nSubsidy = 210 * COIN; //~420000
+    }
+
+    else if(pindexBest->nHeight < 44101)
+    {
+        nSubsidy = 220 * COIN; //~440000
+    }
+
+    else if(pindexBest->nHeight < 46101)
+    {
+        nSubsidy = 230 * COIN; //~460000
+    }
+
+    else if(pindexBest->nHeight < 48101)
+    {
+        nSubsidy = 240 * COIN; //~480000
+    }
+
+    else if(pindexBest->nHeight < 50101)
+    {
+        nSubsidy = 250 * COIN; //~500000
+    }
+
+    else if(pindexBest->nHeight < 52101)
+    {
+        nSubsidy = 260 * COIN; //~520000
+    }
+
+    else if(pindexBest->nHeight < 54101)
+    {
+        nSubsidy = 270 * COIN; //~540000
+    }
+
+    else if(pindexBest->nHeight < 56101)
+    {
+        nSubsidy = 280 * COIN; //~560000
+    }
+
+    else if(pindexBest->nHeight < 58101)
+    {
+        nSubsidy = 290 * COIN; //~580000
+    }
+
+    else if(pindexBest->nHeight < 60101)
+    {
+        nSubsidy = 300 * COIN; //~600000
+    }
+
+    else if(pindexBest->nHeight > 60100)
+    {
+        nSubsidy = nCoinAge * COIN_YEAR_REWARD * 33 / (365 * 33 + 8);  //default 1% yr 
+    }    
 
     if (fDebug && GetBoolArg("-printcreation"))
         printf("GetProofOfStakeReward(): create=%s nCoinAge=%"PRId64"\n", FormatMoney(nSubsidy).c_str(), nCoinAge);
 
     return nSubsidy + nFees;
 }
-
-// miner's coin stake reward based on coin age spent (coin-days)
-int64_t GetProofOfStakeRewardV2(int64_t nCoinAge, int64_t nFees)
-{
-    int64_t nSubsidy = nCoinAge * COIN_YEAR_REWARD * 33 / (365 * 33 + 8) / 2;
-
-    if (fDebug && GetBoolArg("-printcreation"))
-        printf("GetProofOfStakeReward(): create=%s nCoinAge=%"PRId64"\n", FormatMoney(nSubsidy).c_str(), nCoinAge);
-
-    return nSubsidy + nFees;
-}
-
-int64_t GetProofOfStakeReward(int64_t nCoinAge, int64_t nFees, unsigned int nTime)
-{
-	int64_t nReward = 0;
-	if(nTime > FORK_TIME)
-		nReward = GetProofOfStakeRewardV2((int64_t)nCoinAge, nFees);
-	else
-		nReward = GetProofOfStakeRewardV1((int64_t)nCoinAge, nFees);
-	
-	return nReward;
-}
-
-static const int64_t nTargetTimespan = 20 * 60;  // Retarget Difficulty every 20 minutes
 
 //
 // maximum nBits value could possible be required nTime after
@@ -1103,26 +1176,14 @@ unsigned int ComputeMaxBits(CBigNum bnTargetLimit, unsigned int nBase, int64_t n
     bnResult *= 2;
     while (nTime > 0 && bnResult < bnTargetLimit)
     {
-        // Maximum 200% adjustment per day...
+        // Maximum 200% adjustment per hour
         bnResult *= 2;
-        nTime -= 24 * 60 * 60;
+        nTime -= 1 * 60 * 60;
     }
     if (bnResult > bnTargetLimit)
         bnResult = bnTargetLimit;
     return bnResult.GetCompact();
 }
-
-//
-
-
-// minimum amount of work that could possibly be required nTime after
-// minimum proof-of-work required was nBase
-//
-unsigned int ComputeMinWork(unsigned int nBase, int64_t nTime)
-{
-    return ComputeMaxBits(bnProofOfWorkLimit, nBase, nTime);
-}
-
 //
 // minimum amount of stake that could possibly be required nTime after
 // minimum proof-of-stake required was nBase
@@ -1142,9 +1203,19 @@ const CBlockIndex* GetLastBlockIndex(const CBlockIndex* pindex, bool fProofOfSta
 }
 
 
+//
+// minimum amount of work that could possibly be required nTime after
+// minimum work required was nBase
+//
+
+unsigned int ComputeMinWork(unsigned int nBase, int64_t nTime)
+{
+    return ComputeMaxBits(bnProofOfWorkLimit, nBase, nTime);
+}
 unsigned int GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfStake)
 {
-    CBigNum bnTargetLimit = fProofOfStake ? bnProofOfStakeLimit : bnProofOfWorkLimit;
+
+	CBigNum bnTargetLimit = fProofOfStake ? bnProofOfStakeLimit : bnProofOfWorkLimit;
 
     if (pindexLast == NULL)
         return bnTargetLimit.GetCompact(); // genesis block
@@ -1208,8 +1279,8 @@ bool IsInitialBlockDownload()
         pindexLastBest = pindexBest;
         nLastUpdate = GetTime();
     }
-    return (GetTime() - nLastUpdate < 10 &&
-            pindexBest->GetBlockTime() < GetTime() - 24 * 60 * 60);
+    return (GetTime() - nLastUpdate < 15 &&
+            pindexBest->GetBlockTime() < GetTime() - 8 * 60 * 60);
 }
 
 void static InvalidChainFound(CBlockIndex* pindexNew)
@@ -1676,7 +1747,7 @@ bool CBlock::ConnectBlock(CTxDB& txdb, CBlockIndex* pindex, bool fJustCheck)
         if (!vtx[1].GetCoinAge(txdb, nCoinAge))
             return error("ConnectBlock() : %s unable to get coin age for coinstake", vtx[1].GetHash().ToString().substr(0,10).c_str());
 
-        int64_t nCalculatedStakeReward = GetProofOfStakeReward(nCoinAge, nFees, vtx[1].nTime);
+        int64_t nCalculatedStakeReward = GetProofOfStakeReward(nCoinAge, nFees);
 
         if (nStakeReward > nCalculatedStakeReward)
             return DoS(100, error("ConnectBlock() : coinstake pays too much(actual=%"PRId64" vs calculated=%"PRId64")", nStakeReward, nCalculatedStakeReward));
@@ -2062,8 +2133,8 @@ bool CBlock::AddToBlockIndex(unsigned int nFile, unsigned int nBlockPos, const u
         return error("AddToBlockIndex() : ComputeNextStakeModifier() failed");
     pindexNew->SetStakeModifier(nStakeModifier, fGeneratedStakeModifier);
     pindexNew->nStakeModifierChecksum = GetStakeModifierChecksum(pindexNew);
-    if (!CheckStakeModifierCheckpoints(pindexNew->nHeight, pindexNew->nStakeModifierChecksum))
-        return error("AddToBlockIndex() : Rejected by stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindexNew->nHeight, nStakeModifier);
+    //if (!CheckStakeModifierCheckpoints(pindexNew->nHeight, pindexNew->nStakeModifierChecksum))
+        //return error("AddToBlockIndex() : Rejected by stake modifier checkpoint height=%d, modifier=0x%016"PRIx64, pindexNew->nHeight, nStakeModifier);
 
     // Add to mapBlockIndex
     map<uint256, CBlockIndex*>::iterator mi = mapBlockIndex.insert(make_pair(hash, pindexNew)).first;
@@ -2205,6 +2276,9 @@ bool CBlock::AcceptBlock()
 
     if (IsProofOfWork() && nHeight > LAST_POW_BLOCK)
         return DoS(100, error("AcceptBlock() : reject proof-of-work at height %d", nHeight));
+        
+    if (IsProofOfStake() && nHeight < MODIFIER_INTERVAL_SWITCH)
+        return DoS(100, error("AcceptBlock() : reject proof-of-stake at height %d", nHeight));
 
     // Check proof-of-work or proof-of-stake
     if (nBits != GetNextTargetRequired(pindexPrev, IsProofOfStake()))
@@ -2500,7 +2574,7 @@ bool CheckDiskSpace(uint64_t nAdditionalBytes)
         string strMessage = _("Warning: Disk space is low!");
         strMiscWarning = strMessage;
         printf("*** %s\n", strMessage.c_str());
-        uiInterface.ThreadSafeMessageBox(strMessage, "1337", CClientUIInterface::OK | CClientUIInterface::ICON_EXCLAMATION | CClientUIInterface::MODAL);
+        uiInterface.ThreadSafeMessageBox(strMessage, "Steps", CClientUIInterface::OK | CClientUIInterface::ICON_EXCLAMATION | CClientUIInterface::MODAL);
         StartShutdown();
         return false;
     }
@@ -2560,10 +2634,10 @@ bool LoadBlockIndex(bool fAllowNew)
 
     if (fTestNet)
     {
-        pchMessageStart[0] = 0xcd;
-        pchMessageStart[1] = 0xf2;
-        pchMessageStart[2] = 0xc0;
-        pchMessageStart[3] = 0xef;
+        pchMessageStart[0] = 0xad;
+        pchMessageStart[1] = 0xf1;
+        pchMessageStart[2] = 0xc2;
+        pchMessageStart[3] = 0xaf;
 
         bnTrustedModulus.SetHex("f0d14cf72623dacfe738d0892b599be0f31052239cddd95a3f25101c801dc990453b38c9434efe3f372db39a32c2bb44cbaea72d62c8931fa785b0ec44531308df3e46069be5573e49bb29f4d479bfc3d162f57a5965db03810be7636da265bfced9c01a6b0296c77910ebdc8016f70174f0f18a57b3b971ac43a934c6aedbc5c866764a3622b5b7e3f9832b8b3f133c849dbcc0396588abcd1e41048555746e4823fb8aba5b3d23692c6857fccce733d6bb6ec1d5ea0afafecea14a0f6f798b6b27f77dc989c557795cc39a0940ef6bb29a7fc84135193a55bcfc2f01dd73efad1b69f45a55198bd0e6bef4d338e452f6a420f1ae2b1167b923f76633ab6e55");
         bnProofOfWorkLimit = bnProofOfWorkLimitTestNet; // 16 bits PoW target limit for testnet
@@ -2597,25 +2671,11 @@ bool LoadBlockIndex(bool fAllowNew)
 
         // Genesis block
 
-        // MainNet:
 
-        //CBlock(hash=000001faef25dec4fbcf906e6242621df2c183bf232f263d0ba5b101911e4563, ver=1, hashPrevBlock=0000000000000000000000000000000000000000000000000000000000000000, hashMerkleRoot=12630d16a97f24b287c8c2594dda5fb98c9e6c70fc61d44191931ea2aa08dc90, nTime=1393221600, nBits=1e0fffff, nNonce=164482, vtx=1, vchBlockSig=)
-        //  Coinbase(hash=12630d16a9, nTime=1393221600, ver=1, vin.size=1, vout.size=1, nLockTime=0)
-        //    CTxIn(COutPoint(0000000000, 4294967295), coinbase 00012a24323020466562203230313420426974636f696e2041544d7320636f6d6520746f20555341)
-        //    CTxOut(empty)
-        //  vMerkleTree: 12630d16a9
 
-        // TestNet:
-
-        //CBlock(hash=0000724595fb3b9609d441cbfb9577615c292abf07d996d3edabc48de843642d, ver=1, hashPrevBlock=0000000000000000000000000000000000000000000000000000000000000000, hashMerkleRoot=12630d16a97f24b287c8c2594dda5fb98c9e6c70fc61d44191931ea2aa08dc90, nTime=1393221600, nBits=1f00ffff, nNonce=216178, vtx=1, vchBlockSig=)
-        //  Coinbase(hash=12630d16a9, nTime=1393221600, ver=1, vin.size=1, vout.size=1, nLockTime=0)
-        //    CTxIn(COutPoint(0000000000, 4294967295), coinbase 00012a24323020466562203230313420426974636f696e2041544d7320636f6d6520746f20555341)
-        //    CTxOut(empty)
-        //  vMerkleTree: 12630d16a9
-
-        const char* pszTimestamp = "Blockchain.info Block #312427 2014-07-25 14:15:16";
+        const char* pszTimestamp = "September 5, 2015: US Marshals: Final Silk Road Bitcoin Auction Likely for 2015";
         CTransaction txNew;
-        txNew.nTime = 1406297716;
+        txNew.nTime = 1441443328;
         txNew.vin.resize(1);
         txNew.vout.resize(1);
         txNew.vin[0].scriptSig = CScript() << 0 << CBigNum(42) << vector<unsigned char>((const unsigned char*)pszTimestamp, (const unsigned char*)pszTimestamp + strlen(pszTimestamp));
@@ -2625,33 +2685,20 @@ bool LoadBlockIndex(bool fAllowNew)
         block.hashPrevBlock = 0;
         block.hashMerkleRoot = block.BuildMerkleTree();
         block.nVersion = 1;
-        block.nTime    = 1406297716;
+        block.nTime    = 1441443328;
         block.nBits    = bnProofOfWorkLimit.GetCompact();
-        block.nNonce   = !fTestNet ? 190271 : 190271;
-
-        if (false && (block.GetHash() != hashGenesisBlock)) {
-
-        // This will figure out a valid hash and Nonce if you're
-        // creating a different genesis block:
-            uint256 hashTarget = CBigNum().SetCompact(block.nBits).getuint256();
-            while (block.GetHash() > hashTarget)
-               {
-                   ++block.nNonce;
-                   if (block.nNonce == 0)
-                   {
-                       printf("NONCE WRAPPED, incrementing time");
-                       ++block.nTime;
-                   }
-               }
-        }
-        //// debug print
-
-
-        assert(block.hashMerkleRoot == uint256("0xc9c8f6250a60dc79038b9ae68ff747488ac80d4a2db0b194cf49628495448d21"));
-
-
+        block.nNonce   = 922513;
 
         block.print();
+        printf("block.GetHash() == %s\n", block.GetHash().ToString().c_str());
+        printf("block.hashMerkleRoot == %s\n", block.hashMerkleRoot.ToString().c_str());
+        printf("block.nTime = %u \n", block.nTime);
+        printf("block.nNonce = %u \n", block.nNonce);
+
+        assert(block.hashMerkleRoot == uint256("0x7c6b42eac256394a89d484e0fdd7cc894b097395beb7ac0d47f04600d95a1412"));
+
+
+	block.print();
         assert(block.GetHash() == (!fTestNet ? hashGenesisBlock : hashGenesisBlockTestNet));
         assert(block.CheckBlock());
 
@@ -2668,7 +2715,7 @@ bool LoadBlockIndex(bool fAllowNew)
             return error("LoadBlockIndex() : failed to init sync checkpoint");
     }
 
-    string strPubKey = "";
+    string strPubKey = "042e8fa4c787afb98ca0afc279c43f2a76c6807f2f990614afe6015724a1216b9d6239f4c075c8591263c541b8b3d698979c82503c2607a5d5d1f50f50f82bff2a";
 
     // if checkpoint master key changed must reset sync-checkpoint
     if (!txdb.ReadCheckpointPubKey(strPubKey) || strPubKey != CSyncCheckpoint::strMasterPubKey)
@@ -2915,12 +2962,10 @@ bool static AlreadyHave(CTxDB& txdb, const CInv& inv)
 }
 
 
-
-
 // The message start string is designed to be unlikely to occur in normal data.
 // The characters are rarely used upper ASCII, not valid as UTF-8, and produce
 // a large 4-byte int at any alignment.
-unsigned char pchMessageStart[4] = { 0x5a, 0xc3, 0x82, 0xd3 };
+unsigned char pchMessageStart[4] = { 0xa4, 0xd2, 0xf8, 0xa6 };
 
 bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 {
@@ -2948,10 +2993,9 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         CAddress addrFrom;
         uint64_t nNonce = 1;
         vRecv >> pfrom->nVersion >> pfrom->nServices >> nTime >> addrMe;
-        if (pfrom->nVersion < (GetAdjustedTime() > FORK_TIME ? MIN_PROTO_VERSION_FORK : MIN_PROTO_VERSION))
+        if (pfrom->nVersion < MIN_PEER_PROTO_VERSION)
         {
-            // Since February 20, 2012, the protocol is initiated at version 209,
-            // and earlier versions are no longer supported
+            // disconnect from peers older than this proto version
             printf("partner %s using obsolete version %i; disconnecting\n", pfrom->addr.ToString().c_str(), pfrom->nVersion);
             pfrom->fDisconnect = true;
             return false;
@@ -2995,7 +3039,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
         // Change version
         pfrom->PushMessage("verack");
-        pfrom->vSend.SetVersion(min(pfrom->nVersion, PROTOCOL_VERSION));
+        pfrom->ssSend.SetVersion(min(pfrom->nVersion, PROTOCOL_VERSION));
 
         if (!pfrom->fInbound)
         {
@@ -3026,7 +3070,8 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
         static int nAskedForBlocks = 0;
         if (!pfrom->fClient && !pfrom->fOneShot &&
             (pfrom->nStartingHeight > (nBestHeight - 144)) &&
-            (pfrom->nVersion < NOBLKS_VERSION_START || pfrom->nVersion > (GetAdjustedTime() > FORK_TIME ? NOBLKS_VERSION_END_FORK : NOBLKS_VERSION_END)) &&
+            (pfrom->nVersion < NOBLKS_VERSION_START ||
+             pfrom->nVersion >= NOBLKS_VERSION_END) &&
              (nAskedForBlocks < 1 || vNodes.size() <= 1))
         {
             nAskedForBlocks++;
@@ -3069,7 +3114,7 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
 
     else if (strCommand == "verack")
     {
-        pfrom->vRecv.SetVersion(min(pfrom->nVersion, PROTOCOL_VERSION));
+        pfrom->SetRecvVersion(min(pfrom->nVersion, PROTOCOL_VERSION));
     }
 
 
@@ -3577,13 +3622,11 @@ bool static ProcessMessage(CNode* pfrom, string strCommand, CDataStream& vRecv)
     return true;
 }
 
+// requires LOCK(cs_vRecvMsg)
 bool ProcessMessages(CNode* pfrom)
 {
-    CDataStream& vRecv = pfrom->vRecv;
-    if (vRecv.empty())
-        return true;
     //if (fDebug)
-    //    printf("ProcessMessages(%u bytes)\n", vRecv.size());
+    //    printf("ProcessMessages(%zu messages)\n", pfrom->vRecvMsg.size());
 
     //
     // Message format
@@ -3593,33 +3636,38 @@ bool ProcessMessages(CNode* pfrom)
     //  (4) checksum
     //  (x) data
     //
+    bool fOk = true;
 
-    while (true)
-    {
+    std::deque<CNetMessage>::iterator it = pfrom->vRecvMsg.begin();
+    while (!pfrom->fDisconnect && it != pfrom->vRecvMsg.end()) {
         // Don't bother if send buffer is too full to respond anyway
-        if (pfrom->vSend.size() >= SendBufferSize())
+        if (pfrom->nSendSize >= SendBufferSize())
             break;
+
+        // get next message
+        CNetMessage& msg = *it;
+
+        //if (fDebug)
+        //    printf("ProcessMessages(message %u msgsz, %zu bytes, complete:%s)\n",
+        //            msg.hdr.nMessageSize, msg.vRecv.size(),
+        //            msg.complete() ? "Y" : "N");
+
+        // end, if an incomplete message is found
+        if (!msg.complete())
+            break;
+
+        // at this point, any failure means we can delete the current message
+        it++;
 
         // Scan for message start
-        CDataStream::iterator pstart = search(vRecv.begin(), vRecv.end(), BEGIN(pchMessageStart), END(pchMessageStart));
-        int nHeaderSize = vRecv.GetSerializeSize(CMessageHeader());
-        if (vRecv.end() - pstart < nHeaderSize)
-        {
-            if ((int)vRecv.size() > nHeaderSize)
-            {
-                printf("\n\nPROCESSMESSAGE MESSAGESTART NOT FOUND\n\n");
-                vRecv.erase(vRecv.begin(), vRecv.end() - nHeaderSize);
-            }
+        if (memcmp(msg.hdr.pchMessageStart, pchMessageStart, sizeof(pchMessageStart)) != 0) {
+            printf("\n\nPROCESSMESSAGE: INVALID MESSAGESTART\n\n");
+            fOk = false;
             break;
         }
-        if (pstart - vRecv.begin() > 0)
-            printf("\n\nPROCESSMESSAGE SKIPPED %"PRIpdd" BYTES\n\n", pstart - vRecv.begin());
-        vRecv.erase(vRecv.begin(), pstart);
 
         // Read header
-        vector<char> vHeaderSave(vRecv.begin(), vRecv.begin() + nHeaderSize);
-        CMessageHeader hdr;
-        vRecv >> hdr;
+        CMessageHeader& hdr = msg.hdr;
         if (!hdr.IsValid())
         {
             printf("\n\nPROCESSMESSAGE: ERRORS IN HEADER %s\n\n\n", hdr.GetCommand().c_str());
@@ -3629,19 +3677,9 @@ bool ProcessMessages(CNode* pfrom)
 
         // Message size
         unsigned int nMessageSize = hdr.nMessageSize;
-        if (nMessageSize > MAX_SIZE)
-        {
-            printf("ProcessMessages(%s, %u bytes) : nMessageSize > MAX_SIZE\n", strCommand.c_str(), nMessageSize);
-            continue;
-        }
-        if (nMessageSize > vRecv.size())
-        {
-            // Rewind and wait for rest of message
-            vRecv.insert(vRecv.begin(), vHeaderSave.begin(), vHeaderSave.end());
-            break;
-        }
 
         // Checksum
+        CDataStream& vRecv = msg.vRecv;
         uint256 hash = Hash(vRecv.begin(), vRecv.begin() + nMessageSize);
         unsigned int nChecksum = 0;
         memcpy(&nChecksum, &hash, sizeof(nChecksum));
@@ -3652,20 +3690,16 @@ bool ProcessMessages(CNode* pfrom)
             continue;
         }
 
-        // Copy message to its own buffer
-        CDataStream vMsg(vRecv.begin(), vRecv.begin() + nMessageSize, vRecv.nType, vRecv.nVersion);
-        vRecv.ignore(nMessageSize);
-
         // Process message
         bool fRet = false;
         try
         {
             {
                 LOCK(cs_main);
-                fRet = ProcessMessage(pfrom, strCommand, vMsg);
+                fRet = ProcessMessage(pfrom, strCommand, vRecv);
             }
             if (fShutdown)
-                return true;
+                break;
         }
         catch (std::ios_base::failure& e)
         {
@@ -3694,8 +3728,11 @@ bool ProcessMessages(CNode* pfrom)
             printf("ProcessMessage(%s, %u bytes) FAILED\n", strCommand.c_str(), nMessageSize);
     }
 
-    vRecv.Compact();
-    return true;
+    // In case the connection got shut down, its receive buffer was wiped
+    if (!pfrom->fDisconnect)
+        pfrom->vRecvMsg.erase(pfrom->vRecvMsg.begin(), it);
+
+    return fOk;
 }
 
 
@@ -3709,7 +3746,7 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
 
         // Keep-alive ping. We send a nonce of zero because we don't use it anywhere
         // right now.
-        if (pto->nLastSend && GetTime() - pto->nLastSend > 30 * 60 && pto->vSend.empty()) {
+        if (pto->nLastSend && GetTime() - pto->nLastSend > 30 * 60 && pto->vSendMsg.empty()) {
             uint64_t nonce = 0;
             if (pto->nVersion > BIP0031_VERSION)
                 pto->PushMessage("ping", nonce);
